@@ -370,6 +370,16 @@ static int vo_wm_detect(struct vo *vo)
     return wm;
 }
 
+static int xrandr_sort_displays(const void *a, const void *b) {
+    struct xrandr_display *disp_a = (struct xrandr_display *)a;
+    struct xrandr_display *disp_b = (struct xrandr_display *)b;
+    if (disp_a->is_primary)
+        return -1;
+    if (disp_b->is_primary)
+        return 1;
+    return disp_a->num - disp_b->num;
+}
+
 static void xrandr_read(struct vo_x11_state *x11)
 {
     for(int i = 0; i < x11->num_displays; i++)
@@ -394,6 +404,7 @@ static void xrandr_read(struct vo_x11_state *x11)
         return;
     }
 
+    RROutput primary = XRRGetOutputPrimary(x11->display, x11->rootwin);
     for (int o = 0; o < r->noutput; o++) {
         RROutput output = r->outputs[o];
         XRRCrtcInfo *crtc = NULL;
@@ -416,15 +427,15 @@ static void xrandr_read(struct vo_x11_state *x11)
                     vTotal *= 2;
                 if (m.modeFlags & RR_Interlace)
                     vTotal /= 2;
+                int num = x11->num_displays++;
                 struct xrandr_display d = {
                     .rc = { crtc->x, crtc->y,
                             crtc->x + crtc->width, crtc->y + crtc->height },
                     .fps = m.dotClock / (m.hTotal * vTotal),
                     .name = talloc_strdup(x11, out->name),
+                    .is_primary = (output == primary),
+                    .num = num
                 };
-                int num = x11->num_displays++;
-                MP_VERBOSE(x11, "Display %d (%s): [%d, %d, %d, %d] @ %f FPS\n",
-                           num, d.name, d.rc.x0, d.rc.y0, d.rc.x1, d.rc.y1, d.fps);
                 x11->displays[num] = d;
             }
         }
@@ -433,6 +444,15 @@ static void xrandr_read(struct vo_x11_state *x11)
             XRRFreeCrtcInfo(crtc);
         if (out)
             XRRFreeOutputInfo(out);
+    }
+
+    // ICC profile: sorting the displays to put the primary display first
+    qsort(x11->displays, x11->num_displays, sizeof(struct xrandr_display), xrandr_sort_displays);
+    for (int i = 0; i < x11->num_displays; i++) {
+        struct xrandr_display *d = &(x11->displays[i]);
+        d->num = i;
+        MP_VERBOSE(x11, "Display %d (%s): [%d, %d, %d, %d] @ %f FPS\n",
+                   d->num, d->name, d->rc.x0, d->rc.y0, d->rc.x1, d->rc.y1, d->fps);
     }
 
     XRRFreeScreenResources(r);
